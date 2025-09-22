@@ -10,14 +10,14 @@ const router = express.Router();
 
 // Generate JWT token
 const generateToken = (userId) => {
-  return jwt.sign({ userId }, process.env.JWT_SECRET, { expiresIn: '7d' });
+  return jwt.sign({ userId }, process.env.JWT_SECRET, { expiresIn: '30d' });
 };
 
 // Signup route
 router.post('/signup', async (req, res) => {
   try {
     const { email, password, name, phoneNo, city, school, sex } = req.body;
-    
+
     // Debug: Log the received data
     console.log('Signup request body:', {
       email,
@@ -29,7 +29,7 @@ router.post('/signup', async (req, res) => {
       sex,
       fullBody: req.body
     });
-    
+
     // Use phone if contactNo is not provided (for frontend compatibility)
     // const phoneNumber = contactNo || phone;
 
@@ -96,7 +96,9 @@ router.post('/signup', async (req, res) => {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
-      maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+      maxAge: 30 * 24 * 60 * 60 * 1000,// 30 days
+      secure: true,       // must be true for HTTPS
+      sameSite: "none"
     });
 
     res.status(201).json({
@@ -140,15 +142,18 @@ router.post('/login', async (req, res) => {
     const token = generateToken(user.id);
 
     // Set cookie
-    res.cookie('token', token, {
+    res.cookie("token", token, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      maxAge: 30 * 24 * 60 * 60 * 1000,// 30 days
+      secure: true,       // must be true for HTTPS
+      sameSite: "none"  
     });
 
     res.json({
       message: 'Login successful',
+      token, // expose JWT so frontend can store and send as Bearer
       user: {
         id: user.id,
         email: user.email,
@@ -169,17 +174,38 @@ router.post('/login', async (req, res) => {
 });
 
 // Get current user
-router.get('/me', authenticateToken, async (req, res) => {
+router.get("/me", async (req, res) => {
   try {
-    res.json({
-      user: {
-        ...req.user,
-        $id: req.user.userId // For compatibility with existing frontend
-      }
+    // Session user ID is stored in req.session.userId
+    const userId = req.session.userId;
+
+    if (!userId) {
+      return res.json({ user: null }); // no session → no user
+    }
+
+    // Fetch user from DB
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        userId: true,
+        name: true,
+        phoneNo: true,
+        city: true,
+        school: true,
+        sex: true,
+        createdAt: true,
+      },
     });
+
+    if (!user) {
+      return res.json({ user: null }); // user not found
+    }
+
+    return res.json({ user });
   } catch (error) {
-    console.error('Get current user error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    console.error("Auth check error:", error);
+    return res.json({ user: null }); // treat errors as "no user"
   }
 });
 
@@ -193,7 +219,7 @@ router.post('/logout', (req, res) => {
 router.patch('/phone', authenticateToken, async (req, res) => {
   try {
     const { phone } = req.body;
-    
+
     if (!phone) {
       return res.status(400).json({ error: 'Phone number is required' });
     }
